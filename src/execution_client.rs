@@ -1,21 +1,25 @@
 use std::prelude::v1::*;
 
+use core::marker::PhantomData;
 use eth_types::{
-    AccountResult, Block, BlockSelector, FetchState, FetchStateResult, HexBytes, Log, Receipt,
-    StorageResult, Transaction, TransactionInner, SH160, SH256, SU64, SU256, BlockHeader, BlockSimple, AccessListResult,
+    AccessListResult, AccountResult, BlockSelector, BlockSimple, EngineTypes, EthereumEngineTypes,
+    FetchState, FetchStateResult, HexBytes, Log, StorageResult, TxTrait, SH160, SH256, SU256, SU64,
 };
-use jsonrpc::{JsonrpcClient, MixRpcClient, RpcClient, RpcError};
-use serde::{Serialize, Deserialize, de::DeserializeOwned};
+pub use jsonrpc::{JsonrpcClient, MixRpcClient, RpcClient, RpcError};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
-pub struct ExecutionClient<C: RpcClient = MixRpcClient> {
+pub struct ExecutionClient<C: RpcClient = MixRpcClient, E: EngineTypes = EthereumEngineTypes> {
     client: JsonrpcClient<C>,
+    phantom: PhantomData<E>,
 }
 
-impl<C: RpcClient> ExecutionClient<C> {
+impl<C: RpcClient, E: EngineTypes> ExecutionClient<C, E> {
     pub fn new(client: C) -> Self {
         Self {
             client: JsonrpcClient::new(client),
+            phantom: PhantomData,
         }
     }
 
@@ -23,18 +27,13 @@ impl<C: RpcClient> ExecutionClient<C> {
         &self.client
     }
 
-    pub fn to_tx_map(caller: &SH160, tx: &TransactionInner) -> serde_json::Value {
-        let mut tx = match tx {
-            TransactionInner::AccessList(tx) => serde_json::to_value(&tx).unwrap(),
-            TransactionInner::Legacy(tx) => serde_json::to_value(&tx).unwrap(),
-            TransactionInner::DynamicFee(tx) => serde_json::to_value(&tx).unwrap(),
-        };
-        let tx_mut = tx.as_object_mut().unwrap();
-        tx_mut.insert("from".into(), serde_json::to_value(caller).unwrap());
-        tx_mut.remove("r");
-        tx_mut.remove("s");
-        tx_mut.remove("v");
-        return tx;
+    pub fn to_tx_map(caller: &SH160, tx: &E::Transaction) -> serde_json::Value {
+        let mut tx = tx.to_json_map();
+        tx.insert("from".into(), serde_json::to_value(caller).unwrap());
+        tx.remove("r");
+        tx.remove("s");
+        tx.remove("v");
+        return serde_json::Value::Object(tx);
     }
 
     pub fn chain_id(&self) -> Result<u64, RpcError> {
@@ -58,11 +57,16 @@ impl<C: RpcClient> ExecutionClient<C> {
         self.client.rpc("eth_gasPrice", ())
     }
 
-    pub fn send_raw_transaction(&self, tx: &TransactionInner) -> Result<SH256, RpcError> {
+    pub fn send_raw_transaction(&self, tx: &E::Transaction) -> Result<SH256, RpcError> {
         self.client.rpc("eth_sendRawTransaction", (tx,))
     }
 
-    pub fn estimate_gas(&self, tx: &Transaction, block: BlockSelector) -> Result<SU256, RpcError> {
+    pub fn estimate_gas(
+        &self,
+        tx: &E::Transaction,
+        block: BlockSelector,
+    ) -> Result<SU256, RpcError> {
+        let tx = tx.to_json_map();
         self.client.rpc("eth_estimateGas", (tx, block))
     }
 
@@ -76,7 +80,7 @@ impl<C: RpcClient> ExecutionClient<C> {
     pub fn create_access_list(
         &self,
         caller: &SH160,
-        tx: &TransactionInner,
+        tx: &E::Transaction,
         blk: BlockSelector,
     ) -> Result<AccessListResult, RpcError> {
         let mut result: AccessListResult = self
@@ -125,15 +129,18 @@ impl<C: RpcClient> ExecutionClient<C> {
         }
     }
 
-    pub fn get_block_simple(&self, selector: BlockSelector) -> Result<BlockSimple, RpcError> {
+    pub fn get_block_simple(
+        &self,
+        selector: BlockSelector,
+    ) -> Result<BlockSimple<E::BlockHeader, E::Withdrawal>, RpcError> {
         self.get_block_generic(selector, false)
     }
 
-    pub fn get_block_header(&self, selector: BlockSelector) -> Result<BlockHeader, RpcError> {
+    pub fn get_block_header(&self, selector: BlockSelector) -> Result<E::BlockHeader, RpcError> {
         self.get_block_generic(selector, false)
     }
 
-    pub fn get_block(&self, selector: BlockSelector) -> Result<Block, RpcError> {
+    pub fn get_block(&self, selector: BlockSelector) -> Result<E::Block, RpcError> {
         self.get_block_generic(selector, true)
     }
 
@@ -267,17 +274,30 @@ impl<C: RpcClient> ExecutionClient<C> {
         self.client.batch_rpc("debug_dbGet", &params_list)
     }
 
-    pub fn get_transaction(&self, tx: &SH256) -> Result<Transaction, RpcError> {
+    pub fn get_transaction(&self, tx: &SH256) -> Result<E::RpcTransaction, RpcError> {
         self.client.rpc("eth_getTransactionByHash", [tx])
     }
 
-    pub fn get_receipt(&self, hash: &SH256) -> Result<Option<Receipt>, RpcError> {
+    pub fn get_receipt(&self, hash: &SH256) -> Result<Option<E::Receipt>, RpcError> {
         self.client.rpc("eth_getTransactionReceipt", (hash,))
     }
 
-    pub fn get_receipts(&self, hashes: &[SH256]) -> Result<Vec<Option<Receipt>>, RpcError> {
+    pub fn get_receipts(&self, hashes: &[SH256]) -> Result<Vec<Option<E::Receipt>>, RpcError> {
         let hashes = hashes.iter().map(|n| [n]).collect::<Vec<_>>();
         self.client.batch_rpc("eth_getTransactionReceipt", &hashes)
+    }
+
+    pub fn trace_prestate(&self, block: BlockSelector) -> Result<Vec<TxPrestateResult>, RpcError> {
+        let cfg = TraceConfig {
+            tracer: Some("prestateTracer".into()),
+        };
+        match block {
+            BlockSelector::Hash(hash) => self.client.rpc("debug_traceBlockByHash", (hash, cfg)),
+            BlockSelector::Number(number) => {
+                self.client.rpc("debug_traceBlockByNumber", (number, cfg))
+            }
+            BlockSelector::Latest => unimplemented!(),
+        }
     }
 }
 
@@ -299,4 +319,29 @@ pub struct LogFilter {
     pub to_block: Option<SU256>,
     pub from_block: Option<SU256>,
     pub block_hash: Option<SH256>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TraceConfig {
+    pub tracer: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TxPrestateResult {
+    pub tx_hash: SH256,
+    pub result: Option<BTreeMap<SH160, PrestateAccount>>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrestateAccount {
+    pub balance: SU256,
+    #[serde(default)]
+    pub code: HexBytes,
+    #[serde(default)]
+    pub nonce: u64,
+    #[serde(default)]
+    pub storage: BTreeMap<SH256, SH256>,
 }
