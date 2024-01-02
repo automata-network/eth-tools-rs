@@ -190,7 +190,7 @@ impl<C: RpcClient, E: EngineTypes> ExecutionClient<C, E> {
                 }
             }
         }
-        let response = self.client.multi_rpc(request)?;
+        let response = self.client.multi_chunk_rpc(request, 1000)?;
         let mut idx = 0;
         let mut out = Vec::with_capacity(list.len());
         for item in list {
@@ -244,7 +244,8 @@ impl<C: RpcClient, E: EngineTypes> ExecutionClient<C, E> {
                 request.push(self.client.req("eth_getCode", &params)?);
             }
         }
-        let result = self.client.multi_rpc(request)?;
+
+        let result = self.client.multi_chunk_rpc(request, 1000)?;
         let mut out: Vec<FetchStateResult> = Vec::with_capacity(result.len() / 2);
         let mut iter = result.into_iter();
         for item in list {
@@ -290,6 +291,7 @@ impl<C: RpcClient, E: EngineTypes> ExecutionClient<C, E> {
     pub fn trace_prestate(&self, block: BlockSelector) -> Result<Vec<TxPrestateResult>, RpcError> {
         let cfg = TraceConfig {
             tracer: Some("prestateTracer".into()),
+            enable_memory: false,
         };
         match block {
             BlockSelector::Hash(hash) => self.client.rpc("debug_traceBlockByHash", (hash, cfg)),
@@ -322,8 +324,10 @@ pub struct LogFilter {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TraceConfig {
     pub tracer: Option<String>,
+    pub enable_memory: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
