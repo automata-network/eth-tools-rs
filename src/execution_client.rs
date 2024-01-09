@@ -252,14 +252,18 @@ impl<C: RpcClient, E: EngineTypes> ExecutionClient<C, E> {
             let mut state = FetchStateResult::default();
             if let Some(_) = item.access_list {
                 let acc = match iter.next() {
-                    Some(item) => serde_json::from_raw_value(&item).unwrap(),
+                    Some(item) => serde_json::from_raw_value(&item).map_err(|err| {
+                        RpcError::SerdeResponseError("fetch_states_with_proof".into(), item.to_string(), err)
+                    })?,
                     None => break,
                 };
                 state.acc = Some(acc);
             }
             if let Some(_) = item.code {
                 let code = match iter.next() {
-                    Some(item) => serde_json::from_raw_value(&item).unwrap(),
+                    Some(item) => serde_json::from_raw_value(&item).map_err(|err| {
+                        RpcError::SerdeResponseError("fetch_states_with_proof".into(), item.to_string(), err)
+                    })?,
                     None => break,
                 };
                 state.code = Some(code);

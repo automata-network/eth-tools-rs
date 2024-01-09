@@ -5,3 +5,6 @@ extern crate sgxlib as std;
 
 mod execution_client;
 pub use execution_client::*;
+
+mod beacon_client;
+pub use beacon_client::*;
