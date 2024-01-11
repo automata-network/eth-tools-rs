@@ -11,3 +11,6 @@ pub use beacon_client::*;
 
 mod eth_log_subscriber;
 pub use eth_log_subscriber::*;
+
+mod tx_sender;
+pub use tx_sender::*;

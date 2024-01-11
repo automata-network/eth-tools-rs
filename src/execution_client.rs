@@ -61,12 +61,10 @@ impl<C: RpcClient, E: EngineTypes> ExecutionClient<C, E> {
         self.client.rpc("eth_sendRawTransaction", (tx,))
     }
 
-    pub fn estimate_gas(
-        &self,
-        tx: &E::Transaction,
-        block: BlockSelector,
-    ) -> Result<SU256, RpcError> {
-        let tx = tx.to_json_map();
+    pub fn estimate_gas<T>(&self, tx: &T, block: BlockSelector) -> Result<SU256, RpcError>
+    where
+        T: Serialize + std::fmt::Debug,
+    {
         self.client.rpc("eth_estimateGas", (tx, block))
     }
 
@@ -253,7 +251,11 @@ impl<C: RpcClient, E: EngineTypes> ExecutionClient<C, E> {
             if let Some(_) = item.access_list {
                 let acc = match iter.next() {
                     Some(item) => serde_json::from_raw_value(&item).map_err(|err| {
-                        RpcError::SerdeResponseError("fetch_states_with_proof".into(), item.to_string(), err)
+                        RpcError::SerdeResponseError(
+                            "fetch_states_with_proof".into(),
+                            item.to_string(),
+                            err,
+                        )
                     })?,
                     None => break,
                 };
@@ -262,7 +264,11 @@ impl<C: RpcClient, E: EngineTypes> ExecutionClient<C, E> {
             if let Some(_) = item.code {
                 let code = match iter.next() {
                     Some(item) => serde_json::from_raw_value(&item).map_err(|err| {
-                        RpcError::SerdeResponseError("fetch_states_with_proof".into(), item.to_string(), err)
+                        RpcError::SerdeResponseError(
+                            "fetch_states_with_proof".into(),
+                            item.to_string(),
+                            err,
+                        )
                     })?,
                     None => break,
                 };
